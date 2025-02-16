@@ -1,16 +1,9 @@
-import 'dart:convert';
-import 'dart:math';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:rive/rive.dart';
 import 'package:twilio_flutter/twilio_flutter.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:http/http.dart' as http;
-import 'package:firebase_messaging/firebase_messaging.dart';
-// import 'package:googleapis_auth/googleapis_auth.dart' as auth;
-import 'package:googleapis_auth/auth_io.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -26,7 +19,6 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     _requestLocationPermission();
-    _initializeFCM();
 
     // Initialize Twilio
     twilioFlutter = TwilioFlutter(
@@ -34,11 +26,9 @@ class _HomePageState extends State<HomePage> {
       authToken: '425da08d9d8004019c88f03616745da0',
       twilioNumber: '+19302122737',
     );
-
-    updateUserLocation();
   }
 
-  // Request location permission
+  // Function to request location permission
   Future<void> _requestLocationPermission() async {
     LocationPermission permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
@@ -46,195 +36,73 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  // Initialize Firebase Messaging
-  Future<void> _initializeFCM() async {
-    FirebaseMessaging.instance.requestPermission();
-    FirebaseMessaging.instance.getToken().then((token) {
-      if (token != null) {
-        _saveFCMToken(token);
-      }
-    });
-  }
-
-  // Save FCM token to Firestore
-  Future<void> _saveFCMToken(String token) async {
-    User? user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
-      await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
-        'fcmToken': token,
-      }, SetOptions(merge: true));
-    }
-  }
-
-  // Get user's current location
+  // Function to get the user's location
   Future<String> _getUserLocation() async {
+    bool serviceEnabled;
+    LocationPermission permission;
+
+    // Check if location service is enabled
+    serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      return 'Location services are disabled';
+    }
+
+    // Check location permissions
+    permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.deniedForever) {
+        return 'Location permissions are permanently denied';
+      }
+    }
+
     Position position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high);
     return 'https://www.google.com/maps/search/?api=1&query=${position.latitude},${position.longitude}';
   }
 
-  // Update user's location in Firestore
-  Future<void> updateUserLocation() async {
-    Position position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high);
+  // Function to send SOS messages to emergency contacts
+  // Function to send SOS messages to emergency contacts
+Future<void> _sendSOS() async {
+  print("Sending SOS...");
+  String location = await _getUserLocation();
+  String message = '🚨 SOS Alert! I need help! My current location: $location';
 
-    User? user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
-      await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
-        'latitude': position.latitude,
-        'longitude': position.longitude,
-        'email': user.email,
-      }, SetOptions(merge: true));
-    }
+  print(message);
+
+  String userEmail = FirebaseAuth.instance.currentUser?.email ?? '';
+  if (userEmail.isEmpty) {
+    print("No user signed in!");
+    return;
   }
 
-  // Calculate distance between two coordinates (Haversine formula)
-  double calculateDistance(double lat1, double lon1, double lat2, double lon2) {
-    const double R = 6371; // Earth radius in km
-    double dLat = (lat2 - lat1) * pi / 180;
-    double dLon = (lon2 - lon1) * pi / 180;
-    double a = sin(dLat / 2) * sin(dLat / 2) +
-        cos(lat1 * pi / 180) * cos(lat2 * pi / 180) *
-            sin(dLon / 2) * sin(dLon / 2);
-    double c = 2 * atan2(sqrt(a), sqrt(1 - a));
-    return R * c; // Distance in km
-  }
+  QuerySnapshot snapshot = await FirebaseFirestore.instance
+      .collection('contacts')
+      .where('email', isEqualTo: userEmail)
+      .get();
 
-  // Get FCM tokens of nearby users within 3km
-  Future<List<String>> getNearbyUserTokens(Position senderPosition) async {
-    QuerySnapshot snapshot =
-        await FirebaseFirestore.instance.collection('users').get();
-    List<String> fcmTokens = [];
+  print(userEmail);
+  print(snapshot.docs);
+  for (var doc in snapshot.docs) {
+    print(snapshot);
 
-    for (var doc in snapshot.docs) {
-      var data = doc.data() as Map<String, dynamic>;
-      if (data.containsKey('latitude') && data.containsKey('longitude')) {
-        double lat = data['latitude'];
-        double lon = data['longitude'];
-        double distance = calculateDistance(
-            senderPosition.latitude, senderPosition.longitude, lat, lon);
+    var data = doc.data() as Map<String, dynamic>;
+    String phoneNumber = data['phoneNo'].toString();
 
-        if (distance <= 3 && data.containsKey('fcmToken')) {
-          fcmTokens.add(data['fcmToken']);
-        }
-      }
+    try {
+      await twilioFlutter.sendSMS(
+        toNumber: phoneNumber,
+        messageBody: message,
+      );
+      print("SOS sent to $phoneNumber");
+    } catch (e) {
+      print("Failed to send SOS to $phoneNumber: $e");
     }
-    print(fcmTokens);
-    return fcmTokens;
-  }
-
-  // Send SOS message via Twilio and FCM
-  Future<void> _sendSOS() async {
-    print("Sending SOS...");
-    String location = await _getUserLocation();
-    String message = '🚨 SOS Alert! Someone nearby needs help! Location: $location';
-
-    User? user = FirebaseAuth.instance.currentUser;
-    if (user == null) {
-      print("No user signed in!");
-      return;
-    }
-
-    Position senderPosition = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high);
-
-    // Fetch emergency contacts
-    QuerySnapshot contactsSnapshot = await FirebaseFirestore.instance
-        .collection('contacts')
-        .where('email', isEqualTo: user.email)
-        .get();
-
-    List<String> emergencyNumbers = contactsSnapshot.docs
-        .map((doc) => (doc.data() as Map<String, dynamic>)['phoneNo'].toString())
-        .toList();
-
-    // Send SOS message via Twilio SMS
-    for (String phoneNumber in emergencyNumbers) {
-      try {
-        await twilioFlutter.sendSMS(
-          toNumber: phoneNumber,
-          messageBody: message,
-        );
-        print("SOS sent to $phoneNumber via SMS");
-      } catch (e) {
-        print("Failed to send SMS to $phoneNumber: $e");
-      }
-    }
-
-    // Fetch nearby users' FCM tokens
-    List<String> fcmTokens = await getNearbyUserTokens(senderPosition);
-
-    if (fcmTokens.isNotEmpty) {
-      await _sendFCMNotification(fcmTokens, message);
-    }
-  }
-
-  // Send notification via Firebase HTTP v1 API
-  Future<void> _sendFCMNotification(List<String> tokens, String message) async {
-    const String projectId = "sos-app-a03fb"; // Replace with your Firebase project ID
-    const String fcmUrl = "https://fcm.googleapis.com/v1/projects/$projectId/messages:send";
-
-    String? accessToken = await _getAccessToken();
-    if (accessToken == null) {
-      print("Failed to get access token.");
-      return;
-    }
-
-    for (String token in tokens) {
-      print(token);
-      final body = json.encode({
-        "message": {
-          "token": token,
-          "notification": {
-            "title": "SOS Alert 🚨",
-            "body": message,
-          }
-        }
-      });
-
-      final headers = {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $accessToken",
-      };
-
-      try {
-        final response = await http.post(Uri.parse(fcmUrl), headers: headers, body: body);
-        if (response.statusCode == 200) {
-          print("FCM Notification sent successfully!");
-        } else {
-          print("Failed to send FCM Notification: ${response.body}");
-        }
-      } catch (e) {
-        print("Error sending FCM notification: $e");
-      }
-    }
-  }
-
-  // Function to get OAuth 2.0 access token
-Future<String?> _getAccessToken() async {
-  try {
-    // Load service account JSON file from assets
-    final serviceAccountJson =
-        await rootBundle.loadString("assets/icons/serviceAccountKey.json");
-
-    final Map<String, dynamic> credentialsMap = json.decode(serviceAccountJson);
-    final ServiceAccountCredentials credentials =
-        ServiceAccountCredentials.fromJson(credentialsMap);
-
-    final List<String> scopes = [
-      "https://www.googleapis.com/auth/firebase.messaging"
-    ];
-
-    final client = await clientViaServiceAccount(credentials, scopes);
-    
-    return client.credentials.accessToken.data;
-  } catch (e) {
-    print("Failed to get access token: $e");
-    return null;
   }
 }
-  
-@override
+
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Color(0xffFFFFFF),
