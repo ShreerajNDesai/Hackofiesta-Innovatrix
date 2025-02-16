@@ -1,0 +1,14 @@
+import sounddevice as sd
+import wavio
+
+# Recording settings
+duration = 5  # Duration in seconds
+fs = 16000  # Sample rate (16 kHz)
+
+print("Recording normal sound... Speak normally.")
+audio = sd.rec(int(duration * fs), samplerate=fs, channels=1, dtype='int16')
+sd.wait()
+
+# Save the recorded audio
+wavio.write("normal_sound.wav", audio, fs, sampwidth=2)
+print("Recording saved as normal_sound.wav")

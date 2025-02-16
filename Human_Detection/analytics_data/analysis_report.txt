@@ -1,0 +1,12 @@
+
+Security Analysis Report
+Generated: 2025-02-15 22:30:40.682199
+
+Total Incidents: 273
+Most Common Incident: fighting
+High-Risk Locations: Zone_0, Zone_1, Zone_2, Zone_3, Zone_4
+
+Behavior Statistics:
+fighting    241
+walking      12
+chasing      20
